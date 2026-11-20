@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1197,6 +1198,9 @@ func NewVerifier(opts VerifierOptions) (*Verifier, error) {
 // must not call lockDID(did) again, and helpers invoked under the
 // lock must not call back into lockDID for the same DID.
 func (v *Verifier) lockDID(did atmos.DID) func() {
+	// The cache keeps its key: a DID decoded without copying would keep
+	// the whole frame it came from alive until the entry is evicted.
+	did = atmos.DID(strings.Clone(string(did)))
 	mu, _ := v.didMu.PinOrAdd(did, func() *sync.Mutex { return &sync.Mutex{} })
 	mu.Lock()
 	return func() {
@@ -1265,6 +1269,7 @@ func (v *Verifier) shouldResync(did atmos.DID) bool {
 }
 
 func (v *Verifier) allowResync(did atmos.DID) bool {
+	did = atmos.DID(strings.Clone(string(did))) // as in lockDID
 	lim, _ := v.limiters.GetOrAdd(did, func() *rate.Limiter {
 		return rate.NewLimiter(v.opts.ResyncLimit.Val(), v.opts.ResyncBurst.Val())
 	})
