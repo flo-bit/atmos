@@ -848,6 +848,16 @@ type VerifierOptions struct {
 	// Policy selects the failure-handling mode. None → PolicyResync.
 	Policy gt.Option[VerifierPolicy]
 
+	// ShouldResync, when set, is consulted before any automatic getRepo
+	// under PolicyResync. Returning false for a DID makes its failures
+	// behave as under PolicyError (state advances, nothing is fetched)
+	// and makes a #sync for it advance state without a fetch. Consumers
+	// that archive only some repos use it to avoid downloading the rest.
+	// It runs on the verification path; keep it fast.
+	//
+	// ALLUVIUM PATCH: not in upstream atmos v0.8.0.
+	ShouldResync gt.Option[func(did atmos.DID) bool]
+
 	// ResyncLimit is the per-DID token-bucket refill rate. None or
 	// zero → DefaultResyncLimit. Use rate.Inf in tests.
 	ResyncLimit gt.Option[rate.Limit]
@@ -1246,6 +1256,14 @@ func (v *Verifier) verifyCommitSignature(ctx context.Context, did atmos.DID, c *
 // The limiter cache is bounded by LimiterCapacity; an evicted entry's
 // next call gets a fresh limiter (equivalent to a long-quiet DID
 // returning to activity).
+// shouldResync reports whether automatic resyncs are wanted for did.
+func (v *Verifier) shouldResync(did atmos.DID) bool {
+	if !v.opts.ShouldResync.HasVal() {
+		return true
+	}
+	return v.opts.ShouldResync.Val()(did)
+}
+
 func (v *Verifier) allowResync(did atmos.DID) bool {
 	lim, _ := v.limiters.GetOrAdd(did, func() *rate.Limiter {
 		return rate.NewLimiter(v.opts.ResyncLimit.Val(), v.opts.ResyncBurst.Val())
@@ -2437,6 +2455,9 @@ func (v *Verifier) handleVerificationFailure(
 	allowAsyncResync bool,
 ) ([]VerifierOp, error) {
 	policy := v.opts.Policy.ValOr(PolicyResync)
+	if policy == PolicyResync && !v.shouldResync(did) {
+		policy = PolicyError
+	}
 	if policy == PolicyResync && !allowAsyncResync {
 		// Worker replay context: don't re-enqueue; behave like
 		// PolicyError. The caller (the worker) surfaces origErr to
@@ -2648,6 +2669,19 @@ func (v *Verifier) VerifySync(ctx context.Context, syncEvt *comatproto.SyncSubsc
 	// so the deferred unlock releases the second acquisition; it is
 	// parked on a no-op during the unlocked window so a panic inside
 	// the fetch cannot double-unlock.)
+	if !v.shouldResync(did) {
+		// Not a repo the consumer archives: accept the new head without
+		// fetching, so later commits chain off it.
+		if len(syncEvt.Blocks) > 0 {
+			if inner, decErr := decodeCommitFromSyncCAR(syncEvt); decErr == nil {
+				if err := v.opts.StateStore.SaveChain(ctx, did, ChainState{Rev: syncEvt.Rev, Data: inner.Data}); err != nil {
+					v.chainStateSaveFailures.Add(1)
+				}
+			}
+		}
+		return nil, nil
+	}
+
 	unlock()
 	unlock = func() {}
 	fr, rsErr := v.resyncFetch(ctx, did, ReasonSyncEvent)
