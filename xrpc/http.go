@@ -103,7 +103,11 @@ const (
 	// dispatched; exceeding it kills the connection. Independent of
 	// body size — a slow upstream that hasn't started streaming is
 	// indistinguishable from a hung one.
-	BulkResponseHeaderTimeout = 30 * time.Second
+	//
+	// ALLUVIUM PATCH: 30s in upstream atmos v0.8.0. A PDS that assembles
+	// the CAR before it answers needs longer for a large repo (57s for
+	// 45 MB on one), and such a repo failed every attempt.
+	BulkResponseHeaderTimeout = 3 * time.Minute
 
 	// BulkIdleTimeout is the maximum no-progress window during the
 	// body transfer. If neither end has produced bytes for this long,
@@ -152,7 +156,7 @@ const (
 // is governed primarily by three streaming-aware guards, with a
 // generous absolute backstop on top:
 //
-//   - Time-to-first-byte cap of [BulkResponseHeaderTimeout] (30s).
+//   - Time-to-first-byte cap of [BulkResponseHeaderTimeout] (3m).
 //   - Idle-progress cap of [BulkIdleTimeout] (30s no bytes -> kill).
 //   - Minimum sustained transfer rate of [BulkMinTransferBytes]
 //     averaged over [BulkMinTransferWindow] (64 KiB/s over 60s).

@@ -2,10 +2,13 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
 	"github.com/jcalabro/atmos"
+	"github.com/jcalabro/atmos/api/comatproto"
+	"github.com/jcalabro/atmos/xrpc"
 )
 
 // GetRepoStream downloads a repo as a streaming CAR. The caller MUST close
@@ -43,4 +46,18 @@ func (c *Client) GetRepoRateLimitedUntil() time.Time {
 // and returns how long it waited. See [xrpc.Client.WaitRateLimit].
 func (c *Client) WaitGetRepoRateLimit(ctx context.Context) (time.Duration, error) {
 	return c.opts.Client.WaitRateLimit(ctx, getRepoNSID)
+}
+
+// HasRecord asks the host whether it serves the record, with
+// com.atproto.repo.getRecord. Only the host's own RecordNotFound answer is
+// false; any other failure is an error.
+//
+// ALLUVIUM PATCH: not in upstream atmos v0.8.0.
+func (c *Client) HasRecord(ctx context.Context, did atmos.DID, collection, rkey string) (bool, error) {
+	_, err := comatproto.RepoGetRecord(ctx, c.opts.Client, "", collection, string(did), rkey)
+	var xerr *xrpc.Error
+	if errors.As(err, &xerr) && xerr.Name == comatproto.ErrRepoGetRecord_RecordNotFound {
+		return false, nil
+	}
+	return err == nil, err
 }
