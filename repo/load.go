@@ -49,6 +49,16 @@ func LoadCompleteFromCAR(r io.Reader) (*Repo, *Commit, error) {
 // downloaded a FULL repo (no `since` diff) and need to detect such truncation
 // should use [LoadCompleteFromCAR] or call [Repo.CheckComplete].
 func LoadFromCAR(r io.Reader) (*Repo, *Commit, error) {
+	return LoadFromCARWithStore(r, mst.NewMemBlockStore())
+}
+
+// LoadFromCARWithStore is [LoadFromCAR] reading the CAR's blocks into store
+// instead of memory, for repos too large to hold. The returned Repo reads
+// from store; the caller owns its lifetime. Completeness is not checked;
+// call [Repo.CheckComplete].
+//
+// ALLUVIUM PATCH: not in upstream atmos v0.8.0.
+func LoadFromCARWithStore(r io.Reader, store mst.BlockStore) (*Repo, *Commit, error) {
 	cr, err := car.NewReader(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("repo: reading CAR header: %w", err)
@@ -59,7 +69,6 @@ func LoadFromCAR(r io.Reader) (*Repo, *Commit, error) {
 		return nil, nil, errors.New("repo: CAR has no roots")
 	}
 
-	store := mst.NewMemBlockStore()
 	commitCID := header.Roots[0]
 
 	// Read all blocks into the store.

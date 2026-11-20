@@ -134,6 +134,26 @@ func (n *node) markDirty() {
 type Tree struct {
 	root  *node
 	store BlockStore
+	// evictOnWalk makes Walk release each subtree once it has been visited.
+	// ALLUVIUM PATCH: not in upstream atmos v0.8.0.
+	evictOnWalk bool
+}
+
+// SetEvictOnWalk makes Walk release each subtree's decoded nodes as soon as
+// it has visited them, so walking a tree far larger than memory holds only
+// the nodes on the current path. Nodes reload from the store when needed
+// again. Use it for read-only trees backed by an on-disk store; it must not
+// be set on a tree with unwritten changes.
+//
+// ALLUVIUM PATCH: not in upstream atmos v0.8.0.
+func (t *Tree) SetEvictOnWalk(evict bool) { t.evictOnWalk = evict }
+
+// evict drops a clean, stored node's decoded contents; it reloads on demand.
+func (t *Tree) evict(n *node) {
+	if !t.evictOnWalk || n == nil || n.dirty || !n.cid.Defined() {
+		return
+	}
+	n.left, n.entries, n.loaded = nil, nil, false
 }
 
 // NewTree creates a new empty MST backed by the given store.
@@ -703,6 +723,7 @@ func (t *Tree) walkNode(n *node, fn func(key string, val cbor.CID) error, depth 
 	if err := t.walkNode(n.left, fn, depth+1, prev); err != nil {
 		return err
 	}
+	t.evict(n.left)
 
 	for _, e := range n.entries {
 		// Keys within a node are checked on load; this catches a subtree
@@ -719,6 +740,7 @@ func (t *Tree) walkNode(n *node, fn func(key string, val cbor.CID) error, depth 
 		if err := t.walkNode(e.right, fn, depth+1, prev); err != nil {
 			return err
 		}
+		t.evict(e.right)
 	}
 	return nil
 }
